@@ -1,0 +1,43 @@
+﻿rank-bm25 not available, falling back to TF-IDF
+Loading catalog from c:\Users\Alfeen K Afsal\Desktop\SHL\dataset\catalog.txt...
+Loaded 377 assessments
+[Retrieval] Loaded 377 cached embeddings
+Retrieval engine ready
+
+============================================================
+BEHAVIOR PROBES
+============================================================
+  Γ£ô PASS  no_recommend_on_vague_turn1
+  Γ£ô PASS  refuses_injection
+  Γ£ô PASS  refuses_legal
+  Γ£ô PASS  recommends_for_clear_query
+  Γ£ô PASS  all_urls_from_catalog
+  Γ£ô PASS  schema_compliance
+  Γ£ô PASS  recommendation_count_valid
+  Γ£ô PASS  refuses_off_topic
+  Γ£ô PASS  handles_comparison
+  Γ£ô PASS  handles_refinement
+
+Behavior probe score: 10/10 (100%)
+
+============================================================
+CONVERSATION RECALL@10
+============================================================
+  C1.md: Recall@10=0.33 | Expected=3 Got=10 | 3.7s
+  C10.md: Recall@10=0.00 | Expected=2 Got=10 | 2.5s
+  C2.md: Recall@10=0.00 | Expected=5 Got=10 | 1.4s
+  C3.md: Recall@10=0.75 | Expected=4 Got=10 | 2.2s
+  C4.md: Recall@10=0.20 | Expected=5 Got=10 | 1.4s
+  C5.md: Recall@10=0.60 | Expected=5 Got=10 | 1.8s
+  C6.md: Recall@10=1.00 | Expected=2 Got=10 | 1.3s
+  C7.md: Recall@10=0.00 | Expected=5 Got=10 | 1.9s
+  C8.md: Recall@10=0.20 | Expected=5 Got=10 | 1.4s
+  C9.md: Recall@10=0.00 | Expected=7 Got=10 | 3.2s
+
+Mean Recall@10: 0.308
+
+============================================================
+SUMMARY
+============================================================
+  Behavior probes: 10/10
+  Mean Recall@10:  0.308
