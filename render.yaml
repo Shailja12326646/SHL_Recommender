@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: shl-recommender
+    env: docker
+    envVars:
+      - key: CATALOG_PATH
+        value: catalog.txt
+      - key: EMBED_CACHE_PATH
+        value: cache/embeddings.pkl
+      - key: GROQ_API_KEY
+        sync: false
