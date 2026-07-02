@@ -148,44 +148,66 @@ def recommendation_agent(
 ) -> Dict:
     """Retrieve + rank + synthesize recommendation."""
 
-    query = state.to_retrieval_query()
+    # 1. Start with discussed assessments
+    assessments = []
+    seen_ids = set()
+    for url in getattr(state, "discussed_urls", []):
+        a = engine.get_by_url(url)
+        if a and a.id not in seen_ids:
+            assessments.append(a)
+            seen_ids.add(a.id)
 
-    # Determine seniority buckets to filter on
-    seniority_buckets = [state.seniority] if state.seniority else None
+    # 2. Pad with search results if less than 10
+    if len(assessments) < 10:
+        query = state.to_retrieval_query()
 
-    # Determine excluded ids
-    excluded_ids = []
-    if getattr(state, "excluded_targets", None):
-        for name in state.excluded_targets:
-            a = engine.get_by_name(name)
-            if a:
-                excluded_ids.append(a.id)
+        # Loosen seniority filters to prevent strict exclusion of individual contributor tests
+        seniority_buckets = None
+        if state.seniority:
+            compat_map = {
+                "entry": ["entry", "mid"],
+                "mid": ["mid", "entry", "senior"],
+                "senior": ["senior", "mid", "executive"],
+                "manager": ["manager", "senior", "mid"],
+                "executive": ["executive", "senior", "manager"],
+            }
+            seniority_buckets = compat_map.get(state.seniority)
 
-    # Retrieve candidates
-    results = engine.retrieve(
-        query=query,
-        top_k=10,
-        seniority_buckets=seniority_buckets,
-        require_personality=False,  # we handle this in post-processing
-        max_duration=state.max_duration,
-        remote_only=state.remote_required,
-        adaptive_only=state.adaptive_required,
-        language=state.language,
-        excluded_ids=excluded_ids,
-    )
+        excluded_ids = list(seen_ids)
+        if getattr(state, "excluded_targets", None):
+            for name in state.excluded_targets:
+                a = engine.get_by_name(name)
+                if a:
+                    excluded_ids.append(a.id)
 
-    if not results:
-        # Retry without seniority filter
-        results = engine.retrieve(
+        search_results = engine.retrieve(
             query=query,
             top_k=10,
+            seniority_buckets=seniority_buckets,
+            require_personality=False,
             max_duration=state.max_duration,
+            remote_only=state.remote_required,
+            adaptive_only=state.adaptive_required,
+            language=state.language,
+            excluded_ids=excluded_ids,
         )
 
-    assessments = [a for a, _ in results]
+        if not search_results and seniority_buckets:
+            # Retry without seniority filter
+            search_results = engine.retrieve(
+                query=query,
+                top_k=10,
+                max_duration=state.max_duration,
+                excluded_ids=excluded_ids,
+            )
+
+        for a, _ in search_results:
+            if a.id not in seen_ids:
+                assessments.append(a)
+                seen_ids.add(a.id)
 
     # ── Post-processing: inject required types ─────────────────────
-    assessments = _inject_required_types(assessments, state, engine, query)
+    assessments = _inject_required_types(assessments, state, engine, state.to_retrieval_query())
 
     # Cap at 10
     assessments = assessments[:10]
@@ -443,7 +465,7 @@ def orchestrate(
         return make_response(generate_refusal(refusal_reason))
 
     # ── Step 2: State extraction ───────────────────────────────────
-    state = extract_state_from_messages(messages)
+    state = extract_state_from_messages(messages, engine)
     turn_number = sum(1 for m in messages if m.get("role") == "user")
 
     # ── Step 3: Intent detection ───────────────────────────────────

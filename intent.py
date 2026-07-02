@@ -58,6 +58,7 @@ class ConversationState:
 
     # Prior state
     prior_recommendations: List[str] = field(default_factory=list)  # URLs
+    discussed_urls: List[str] = field(default_factory=list)  # URLs discussed
     has_provided_context: bool = False
 
     # Job description text (if pasted)
@@ -229,7 +230,47 @@ def detect_intent(
     return Intent.UNKNOWN  # caller resolves CLARIFY vs RECOMMEND
 
 
-def extract_state_from_messages(messages: List[Dict[str, str]]) -> ConversationState:
+def find_assessments_in_text(text: str, engine: Any) -> List[str]:
+    text_lower = text.lower()
+    found_urls = []
+    
+    # 1. Check manual abbreviations/aliases first
+    manual_maps = {
+        r"\bopq(?:32[rn]?)?\b": "https://www.shl.com/products/product-catalog/view/occupational-personality-questionnaire-opq32r",
+        r"\bverify\s*g\+?\b": "https://www.shl.com/products/product-catalog/view/shl-verify-interactive-g",
+        r"\bgsa\b": "https://www.shl.com/products/product-catalog/view/global-skills-assessment",
+        r"\bdsi\b": "https://www.shl.com/products/product-catalog/view/dependability-and-safety-instrument-dsi",
+        r"\bsvar\b": "https://www.shl.com/products/product-catalog/view/svar-spoken-english-us-new",
+        r"\badept\b": "https://www.shl.com/products/product-catalog/view/adept-15-report",
+    }
+    for pattern, url in manual_maps.items():
+        if re.search(pattern, text_lower):
+            found_urls.append(url)
+            
+    # 2. Check full names of assessments in catalog
+    if hasattr(engine, "assessments"):
+        for a in engine.assessments:
+            name_clean = re.sub(r"\s*\((New|General|USA|Interactive|365|2\.0|1\.0)\)", "", a.name, flags=re.IGNORECASE)
+            name_clean_lower = name_clean.lower().strip()
+            
+            # Skip generic short/common names to avoid false positives
+            if name_clean_lower in {
+                "java", "python", "sql", "excel", "word", "sales", "manager", "director", 
+                "entry", "senior", "development", "report", "test", "assessment", "interactive",
+                "feedback", "live", "coding", "live coding", "skills", "knowledge", "ability", 
+                "aptitude", "reasoning", "personality", "behavior", "behaviour", "scenarios", 
+                "support", "verify", "verify - numerical reasoning", "verify - verbal reasoning",
+                "numerical reasoning", "verbal reasoning", "inductive reasoning", "deductive reasoning"
+            }:
+                continue
+                
+            if len(name_clean_lower) > 4 and name_clean_lower in text_lower:
+                found_urls.append(a.url)
+                
+    return list(dict.fromkeys(found_urls))  # dedupe
+
+
+def extract_state_from_messages(messages: List[Dict[str, str]], engine: Optional[Any] = None) -> ConversationState:
     """
     Reconstruct full ConversationState from message history.
     Processes all user messages in order; later messages override earlier ones.
@@ -242,11 +283,30 @@ def extract_state_from_messages(messages: List[Dict[str, str]]) -> ConversationS
         content = msg.get("content", "")
         content_lower = content.lower()
 
+        # Extract URLs or names mentioned by either assistant or user
+        if engine:
+            # Extract valid URLs in text
+            msg_urls = re.findall(r"https://www\.shl\.com/products/product-catalog/[^\s\)>|]+", content)
+            for u in msg_urls:
+                u_norm = u.rstrip("/")
+                if engine.is_valid_url(u_norm) or engine.is_valid_url(u_norm + "/"):
+                    if u_norm not in state.discussed_urls:
+                        state.discussed_urls.append(u_norm)
+            
+            # Detect names in text
+            detected_urls = find_assessments_in_text(content, engine)
+            for url in detected_urls:
+                url_norm = url.rstrip("/")
+                if url_norm not in state.discussed_urls:
+                    state.discussed_urls.append(url_norm)
+
         if role == "assistant":
             # Extract URLs from prior recommendations
             urls = re.findall(r"https://www\.shl\.com/products/product-catalog/[^\s\)>|]+", content)
-            if urls:
-                prior_rec_urls = urls
+            for u in urls:
+                u_norm = u.rstrip("/")
+                if u_norm not in prior_rec_urls:
+                    prior_rec_urls.append(u_norm)
             continue
 
         if role != "user":
@@ -365,6 +425,40 @@ def extract_state_from_messages(messages: List[Dict[str, str]]) -> ConversationS
         )
         if compare_match:
             state.compare_targets = list(set(state.compare_targets + compare_match))
+
+    if engine:
+        # Final filter on discussed_urls based on exclusions/negations
+        final_discussed = []
+        for url in state.discussed_urls:
+            url_norm = url.rstrip("/")
+            a = engine.get_by_url(url_norm)
+            if not a:
+                # Try with slash
+                a = engine.get_by_url(url_norm + "/")
+            if not a:
+                continue
+            
+            # Check if excluded by name
+            is_excluded = False
+            for excl in state.excluded_targets:
+                excl_lower = excl.lower()
+                if excl_lower in a.name.lower() or a.name.lower() in excl_lower:
+                    is_excluded = True
+                    break
+            if is_excluded:
+                continue
+                
+            # Check if category is disabled
+            if not state.require_personality and "Personality & Behavior" in a.categories:
+                if "opq" in a.name.lower():
+                    continue
+            if not state.require_cognitive and "Ability & Aptitude" in a.categories:
+                if "verify" in a.name.lower() or "gsa" in a.name.lower():
+                    continue
+                    
+            final_discussed.append(url_norm)
+            
+        state.discussed_urls = final_discussed
 
     state.prior_recommendations = prior_rec_urls
     return state

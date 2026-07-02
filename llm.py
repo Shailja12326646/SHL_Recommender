@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -46,11 +47,43 @@ def _call_openai_compat(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    
+    # Retry loop for 429 / connection issues / timeouts
+    for attempt in range(5):
+        try:
+            response = httpx.post(
+                f"{base_url}/chat/completions",
+                json=payload,
+                headers=headers,
+                timeout=10.0,
+            )
+            if response.status_code == 429:
+                sleep_seconds = 2 ** attempt
+                print(f"[LLM] Rate limited (429). Retrying in {sleep_seconds}s...")
+                time.sleep(sleep_seconds)
+                continue
+            response.raise_for_status()
+            data = response.json()
+            return data["choices"][0]["message"]["content"]
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                sleep_seconds = 2 ** attempt
+                print(f"[LLM] Rate limited (429). Retrying in {sleep_seconds}s...")
+                time.sleep(sleep_seconds)
+                continue
+            raise e
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            sleep_seconds = 2 ** attempt
+            print(f"[LLM] Request failed: {e}. Retrying in {sleep_seconds}s...")
+            time.sleep(sleep_seconds)
+            continue
+            
+    # Final fallback/last try
     response = httpx.post(
         f"{base_url}/chat/completions",
         json=payload,
         headers=headers,
-        timeout=5.0,
+        timeout=10.0,
     )
     response.raise_for_status()
     data = response.json()
